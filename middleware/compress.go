@@ -140,7 +140,7 @@ func NewCompressor(level int, types ...string) *Compressor {
 //  import brotli_enc "gopkg.in/kothar/brotli-go.v0/enc"
 //
 //  compressor := middleware.NewCompressor(5, "text/html")
-//  compressor.SetEncoder("br", func(w http.ResponseWriter, level int) io.Writer {
+//  compressor.SetEncoder("br", func(w io.Writer, level int) io.Writer {
 //    params := brotli_enc.NewBrotliParams()
 //    params.SetQuality(level)
 //    return brotli_enc.NewBrotliWriter(params, w)
@@ -318,7 +318,7 @@ func (cw *compressResponseWriter) WriteHeader(code int) {
 	if cw.encoding != "" {
 		cw.compressable = true
 		cw.Header().Set("Content-Encoding", cw.encoding)
-		cw.Header().Set("Vary", "Accept-Encoding")
+		cw.Header().Add("Vary", "Accept-Encoding")
 
 		// The content-length after compression is unknown
 		cw.Header().Del("Content-Length")
