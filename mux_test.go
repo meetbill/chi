@@ -121,7 +121,7 @@ func TestMuxBasic(t *testing.T) {
 
 	// GET /
 	if _, body := testRequest(t, ts, "GET", "/", nil); body != "hi peter" {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 	tlogmsg, _ := logbuf.ReadString(0)
 	if tlogmsg != logmsg {
@@ -130,37 +130,37 @@ func TestMuxBasic(t *testing.T) {
 
 	// GET /ping
 	if _, body := testRequest(t, ts, "GET", "/ping", nil); body != "." {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 
 	// GET /pingall
 	if _, body := testRequest(t, ts, "GET", "/pingall", nil); body != "ping all" {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 
 	// GET /ping/all
 	if _, body := testRequest(t, ts, "GET", "/ping/all", nil); body != "ping all" {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 
 	// GET /ping/all2
 	if _, body := testRequest(t, ts, "GET", "/ping/all2", nil); body != "ping all2" {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 
 	// GET /ping/123
 	if _, body := testRequest(t, ts, "GET", "/ping/123", nil); body != "ping one id: 123" {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 
 	// GET /ping/allan
 	if _, body := testRequest(t, ts, "GET", "/ping/allan", nil); body != "ping one id: allan" {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 
 	// GET /ping/1/woop
 	if _, body := testRequest(t, ts, "GET", "/ping/1/woop", nil); body != "woop.1" {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 
 	// HEAD /ping
@@ -177,7 +177,7 @@ func TestMuxBasic(t *testing.T) {
 
 	// GET /admin/catch-this
 	if _, body := testRequest(t, ts, "GET", "/admin/catch-thazzzzz", nil); body != "catchall" {
-		t.Fatalf(body)
+		t.Fatal(body)
 	}
 
 	// POST /admin/catch-this
@@ -202,7 +202,7 @@ func TestMuxBasic(t *testing.T) {
 
 	// Custom http method DIE /ping/1/woop
 	if resp, body := testRequest(t, ts, "DIE", "/ping/1/woop", nil); body != "" || resp.StatusCode != 405 {
-		t.Fatalf(fmt.Sprintf("expecting 405 status and empty body, got %d '%s'", resp.StatusCode, body))
+		t.Fatalf("expecting 405 status and empty body, got %d '%s'", resp.StatusCode, body)
 	}
 }
 
@@ -637,6 +637,89 @@ func TestMuxWith(t *testing.T) {
 	}
 	if cmwHandler2 != 1 {
 		t.Fatalf("expecting cmwHandler2 to be 1, got %d", cmwHandler2)
+	}
+}
+
+func TestMuxHandlePatternValidation(t *testing.T) {
+	testCases := []struct {
+		name           string
+		pattern        string
+		shouldPanic    bool
+		method         string // Method to be used for the test request
+		path           string // Path to be used for the test request
+		expectedBody   string // Expected response body
+		expectedStatus int    // Expected HTTP status code
+	}{
+		// Valid patterns
+		{
+			name:           "Valid pattern without HTTP GET",
+			pattern:        "/user/{id}",
+			shouldPanic:    false,
+			method:         "GET",
+			path:           "/user/123",
+			expectedBody:   "without-prefix GET",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Valid pattern with HTTP POST",
+			pattern:        "POST /products/{id}",
+			shouldPanic:    false,
+			method:         "POST",
+			path:           "/products/456",
+			expectedBody:   "with-prefix POST",
+			expectedStatus: http.StatusOK,
+		},
+		// Invalid patterns
+		{
+			name:        "Invalid pattern with no method",
+			pattern:     "INVALID/user/{id}",
+			shouldPanic: true,
+		},
+		{
+			name:        "Invalid pattern with supported method",
+			pattern:     "GET/user/{id}",
+			shouldPanic: true,
+		},
+		{
+			name:        "Invalid pattern with unsupported method",
+			pattern:     "UNSUPPORTED /unsupported-method",
+			shouldPanic: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil && !tc.shouldPanic {
+					t.Errorf("Unexpected panic for pattern %s:\n%v", tc.pattern, r)
+				}
+			}()
+
+			r1 := NewRouter()
+			r1.Handle(tc.pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(tc.expectedBody))
+			}))
+
+			// Test that HandleFunc also handles method patterns
+			r2 := NewRouter()
+			r2.HandleFunc(tc.pattern, func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(tc.expectedBody))
+			})
+
+			if !tc.shouldPanic {
+				for _, r := range []Router{r1, r2} {
+					// Use testRequest for valid patterns
+					ts := httptest.NewServer(r)
+					defer ts.Close()
+
+					resp, body := testRequest(t, ts, tc.method, tc.path, nil)
+					if body != tc.expectedBody || resp.StatusCode != tc.expectedStatus {
+						t.Errorf("Expected status %d and body %s; got status %d and body %s for pattern %s",
+							tc.expectedStatus, tc.expectedBody, resp.StatusCode, body, tc.pattern)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -1728,6 +1811,116 @@ func TestMuxMatch(t *testing.T) {
 	tctx.Reset()
 	if r.Match(tctx, "HEAD", "/articles/10") == true {
 		t.Fatal("not expecting to find match for route:", "HEAD", "/articles/10")
+	}
+}
+
+func TestMuxMatch_HasBasePath(t *testing.T) {
+	r := NewRouter()
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Test", "yes")
+		w.Write([]byte(""))
+	})
+
+	tctx := NewRouteContext()
+
+	tctx.Reset()
+	if r.Match(tctx, "GET", "/") != true {
+		t.Fatal("expecting to find match for route:", "GET", "/")
+	}
+}
+
+func TestMuxMatch_DoesNotHaveBasePath(t *testing.T) {
+	r := NewRouter()
+
+	tctx := NewRouteContext()
+
+	tctx.Reset()
+	if r.Match(tctx, "GET", "/") != false {
+		t.Fatal("not expecting to find match for route:", "GET", "/")
+	}
+}
+
+func TestMuxFind(t *testing.T) {
+	r := NewRouter()
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Test", "yes")
+		w.Write([]byte(""))
+	})
+	r.Get("/hi", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Test", "yes")
+		w.Write([]byte("bye"))
+	})
+	r.Route("/yo", func(r Router) {
+		r.Get("/sup", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("sup"))
+		})
+	})
+	r.Route("/articles", func(r Router) {
+		r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
+			id := URLParam(r, "id")
+			w.Header().Set("X-Article", id)
+			w.Write([]byte("article:" + id))
+		})
+	})
+	r.Route("/users", func(r Router) {
+		r.Head("/{id}", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-User", "-")
+			w.Write([]byte("user"))
+		})
+		r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
+			id := URLParam(r, "id")
+			w.Header().Set("X-User", id)
+			w.Write([]byte("user:" + id))
+		})
+	})
+	r.Route("/api", func(r Router) {
+		r.Route("/groups", func(r Router) {
+			r.Route("/v2", func(r Router) {
+				r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+					w.Write([]byte("groups"))
+				})
+				r.Post("/{id}", func(w http.ResponseWriter, r *http.Request) {
+					w.Write([]byte("POST groups"))
+				})
+			})
+		})
+	})
+
+	tctx := NewRouteContext()
+
+	tctx.Reset()
+	if r.Find(tctx, "GET", "") == "/" {
+		t.Fatal("expecting to find pattern / for route: GET")
+	}
+
+	tctx.Reset()
+	if r.Find(tctx, "GET", "/nope") != "" {
+		t.Fatal("not expecting to find pattern for route: GET /nope")
+	}
+
+	tctx.Reset()
+	if r.Find(tctx, "GET", "/users/1") != "/users/{id}" {
+		t.Fatal("expecting to find pattern /users/{id} for route: GET /users/1")
+	}
+
+	tctx.Reset()
+	if r.Find(tctx, "HEAD", "/articles/10") != "" {
+		t.Fatal("not expecting to find pattern for route: HEAD /articles/10")
+	}
+
+	tctx.Reset()
+	if r.Find(tctx, "GET", "/yo/sup") != "/yo/sup" {
+		t.Fatal("expecting to find pattern /yo/sup for route: GET /yo/sup")
+	}
+
+	tctx.Reset()
+	if r.Find(tctx, "GET", "/api/groups/v2/") != "/api/groups/v2/" {
+		t.Fatal("expecting to find pattern /api/groups/v2/ for route: GET /api/groups/v2/")
+	}
+
+	tctx.Reset()
+	if r.Find(tctx, "POST", "/api/groups/v2/1") != "/api/groups/v2/{id}" {
+		t.Fatal("expecting to find pattern /api/groups/v2/{id} for route: POST /api/groups/v2/1")
 	}
 }
 
